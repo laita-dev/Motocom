@@ -1,5 +1,6 @@
 package com.motocom.bike
 
+import android.net.Network
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -68,7 +69,6 @@ enum class BikeState { LISTENING, GREETED, SHOWING, CLOSED }
 interface BikeEvents {
     fun log(line: String)
     fun state(state: BikeState) {}
-    fun input(input: BikeInput) {}
 
     /**
      * The bike's side of the conversation died without the phone closing it. Said once per
@@ -100,8 +100,11 @@ class BikeLink(
     private val pxcPort: Int = 10922,
     private val controlPort: Int = 10921,
     private val dataPort: Int = 10920,
-    /** Who may connect: anybody else on the same network is shown the door at once. */
-    private val allow: (InetAddress) -> Boolean = { true }
+    /**
+     * Who may connect, from where and to which of the phone's addresses: anybody else on the
+     * same network is shown the door at once.
+     */
+    private val allow: (from: InetAddress, to: InetAddress?) -> Boolean = { _, _ -> true }
 ) : Closeable {
 
     @Volatile private var closed = false
@@ -125,28 +128,25 @@ class BikeLink(
     @Volatile var bikeInfo: JsonObject? = null
         private set
 
-    /** The ports really taken, which only differ from the ones asked for in tests. */
-    var pxcPortBound = 0; private set
-    var controlPortBound = 0; private set
-    var dataPortBound = 0; private set
-
     @Throws(IOException::class)
     fun open() {
-        pxcPortBound = listen("pxc", pxcPort, ::pxc)
-        controlPortBound = listen("control", controlPort, ::control)
-        dataPortBound = listen("data", dataPort, ::data)
+        listen("pxc", pxcPort, ::pxc)
+        listen("control", controlPort, ::control)
+        listen("data", dataPort, ::data)
         events.state(BikeState.LISTENING)
     }
 
     /**
      * Tells the bike the phone is there and listening. The bike only comes to the phone's ports
      * after this. [from] ties the call to the wifi-direct side of a phone that is also on
-     * mobile data.
+     * mobile data; [network], to the bike's wifi joined as an ordinary one, which only routes
+     * what is made on it.
      */
-    fun knock(bike: InetAddress, from: InetAddress? = null, port: Int = 10930): Boolean {
+    fun knock(bike: InetAddress, from: InetAddress? = null, network: Network? = null, port: Int = 10930): Boolean {
         return try {
             Socket().use { socket ->
-                if (from != null) socket.bind(InetSocketAddress(from, 0))
+                if (network != null) network.bindSocket(socket)
+                else if (from != null) socket.bind(InetSocketAddress(from, 0))
                 socket.connect(InetSocketAddress(bike, port), 2000)
                 socket.soTimeout = 2000
                 val hello = buildJsonObject {
@@ -182,14 +182,14 @@ class BikeLink(
         events.state(BikeState.CLOSED)
     }
 
-    private fun listen(name: String, port: Int, serve: (Socket) -> Unit): Int {
+    private fun listen(name: String, port: Int, serve: (Socket) -> Unit) {
         val door = ServerSocket(port, 50)
         synchronized(doors) { doors += door }
         thread(name = "moto-$name", isDaemon = true) {
             while (!closed) {
                 val socket = try { door.accept() } catch (e: IOException) { break }
                 val from: InetAddress? = socket.inetAddress
-                if (from == null || !runCatching { allow(from) }.getOrDefault(false)) {
+                if (from == null || !runCatching { allow(from, socket.localAddress) }.getOrDefault(false)) {
                     if (from != null && refused.add(from)) events.log("conexión rechazada de ${from.hostAddress}")
                     runCatching { socket.close() }
                     continue
@@ -224,7 +224,6 @@ class BikeLink(
                 }
             }
         }
-        return door.localPort
     }
 
     // ---- The conversation ---------------------------------------------------------------
@@ -441,10 +440,8 @@ class BikeLink(
                         events.log(if (started) "la moto pide empezar: codificador listo" else "la moto pide empezar y no se puede ($wanted)")
                         Rv.write(output, if (started) Rv.START + 1 else Rv.START_FAILED)
                     }
-                    Rv.KEY_OR_TOUCH -> BikeInput.parse(asked.body)?.let {
-                        events.log("la moto manda una pulsación: $it")
-                        events.input(it)
-                    }
+                    // Nothing comes of them on this bike; the record says if one ever does.
+                    Rv.KEY_OR_TOUCH -> BikeInput.parse(asked.body)?.let { events.log("la moto manda una pulsación: $it") }
                     Rv.SHELL -> {
                         val answer = when (String(asked.body).trim('\u0000', ' ')) {
                             "getprop ro.build.version.release" -> card.androidSdk.toString()
@@ -502,15 +499,15 @@ class BikeLink(
         picture.fresh()
         var shown = false
         var sent = 0
+        var bytes = 0L
         var empty = 0
         var countedFrom = System.currentTimeMillis()
         val length = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN)
         while (!closed && dataTurn.get() == turn) {
-            val now = request ?: run {
+            wanted = request ?: run {
                 events.log("datos: la moto ya no pide imagen")
                 return
             }
-            if (now !== wanted) wanted = now
             val wait = if (wanted.fps <= 0) {
                 val next = Rv.read(input)
                 if (next.command != Rv.NEXT_FRAME) {
@@ -527,12 +524,18 @@ class BikeLink(
             output.write(length.putInt(0, chunk?.size ?: 0).array())
             if (chunk != null) output.write(chunk)
             output.flush()
-            if (chunk != null) sent++ else empty++
+            if (chunk != null) {
+                sent++
+                bytes += chunk.size
+            } else {
+                empty++
+            }
             // A line every so often says whether the bike keeps asking and the picture keeps
             // coming, which is all there is to go on afterwards.
             if (System.currentTimeMillis() - countedFrom >= TALLY_MS) {
-                events.log("imagen: $sent enviadas y $empty peticiones sin nada nuevo en ${TALLY_MS / 1000} s")
+                events.log("imagen: $sent enviadas (${bytes / 1024} KB) y $empty peticiones sin nada nuevo en ${TALLY_MS / 1000} s")
                 sent = 0
+                bytes = 0
                 empty = 0
                 countedFrom = System.currentTimeMillis()
             }

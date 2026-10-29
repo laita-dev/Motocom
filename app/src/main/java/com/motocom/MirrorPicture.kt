@@ -3,6 +3,7 @@ package com.motocom
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.HandlerThread
@@ -66,8 +67,7 @@ class MirrorPicture(
     private val moverLock = Any()
 
     /** The bike's screen, or -1. */
-    @Volatile var displayId = -1
-        private set
+    @Volatile private var displayId = -1
 
     /** SPS and PPS: what a decoder needs before the first frame. */
     @Volatile private var header: ByteArray? = null
@@ -80,6 +80,9 @@ class MirrorPicture(
 
     /** When the encoder was last started over after failing; a few a minute at most. */
     private val restarts = ArrayDeque<Long>()
+
+    /** The first whole frames of each encoder, told in the record; only on the encoder's thread. */
+    private var keyframesTold = 0
 
     @Synchronized
     override fun start(request: PictureRequest): Boolean {
@@ -94,7 +97,7 @@ class MirrorPicture(
         val width = request.encodedWidth
         val height = request.encodedHeight
         return try {
-            val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height).apply {
+            fun format(baseline: Boolean) = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height).apply {
                 setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
                 setInteger(MediaFormat.KEY_BIT_RATE, request.bitRate)
                 setInteger(MediaFormat.KEY_FRAME_RATE, if (request.fps > 0) request.fps else FPS)
@@ -103,12 +106,20 @@ class MirrorPicture(
                 setLong(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, 100_000L)
                 // The screen paints at 60 Hz and the bike takes about 30.
                 setFloat(MediaFormat.KEY_MAX_FPS_TO_ENCODER, FPS.toFloat())
-                // Optimizations: real-time priority, lowest latency, zero B-frame reordering delay
+                // Real-time priority and minimum latency for video streaming
                 setInteger(MediaFormat.KEY_PRIORITY, 0)
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
-                    setInteger(MediaFormat.KEY_LATENCY, 0)
-                }
+                if (Build.VERSION.SDK_INT >= 30) setInteger(MediaFormat.KEY_LATENCY, 0)
+                setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
                 setInteger("max-bframes", 0)
+                if (baseline) {
+                    setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline)
+                    // 3.1 holds up to 1280x720; bigger screens need 4.
+                    val blocks = ((width + 15) / 16) * ((height + 15) / 16)
+                    setInteger(
+                        MediaFormat.KEY_LEVEL,
+                        if (blocks <= 3600) MediaCodecInfo.CodecProfileLevel.AVCLevel31 else MediaCodecInfo.CodecProfileLevel.AVCLevel4
+                    )
+                }
             }
             // Each piece goes into its field as soon as it exists, so stopEncoder lets go of
             // whatever was made if a later step throws.
@@ -116,16 +127,33 @@ class MirrorPicture(
             codecThread = thread
             val encoder = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
             codec = encoder
-            encoder.setCallback(output, Handler(thread.looper))
-            encoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-            val input = encoder.createInputSurface()
-            surface = input
+            keyframesTold = 0
             header = null
             synchronized(queue) {
                 waitingForWholeFrame = true
                 chunks.clear()
             }
-            encoder.start()
+            fun prepare(baseline: Boolean): Surface {
+                encoder.setCallback(output, Handler(thread.looper))
+                encoder.configure(format(baseline), null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+                val made = encoder.createInputSurface()
+                try {
+                    encoder.start()
+                } catch (e: Exception) {
+                    made.release()
+                    throw e
+                }
+                return made
+            }
+            // Some encoders take the profile and only fail when started.
+            val input = try {
+                prepare(true)
+            } catch (e: Exception) {
+                log("el codificador no acepta el perfil básico ($e): se usa el suyo")
+                encoder.reset()
+                prepare(false)
+            }
+            surface = input
             log("codificador ${encoder.name}: ${width}x$height a ${request.bitRate / 1000} kbit/s")
             val framed = BlackEdges(input, width, height, log)
             edges = framed
@@ -224,9 +252,11 @@ class MirrorPicture(
             chunks.clear()
             waitingForWholeFrame = true
         }
-        runCatching {
-            codec?.setParameters(Bundle().apply { putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0) })
-        }
+        askWholeFrame(codec)
+    }
+
+    private fun askWholeFrame(codec: MediaCodec?) {
+        runCatching { codec?.setParameters(Bundle().apply { putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0) }) }
     }
 
     override fun next(waitMs: Long): ByteArray? = chunks.poll(waitMs, TimeUnit.MILLISECONDS)
@@ -308,9 +338,18 @@ class MirrorPicture(
             if (bytes.isEmpty() || codec !== this@MirrorPicture.codec) return
             if (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
                 header = bytes
+                log("cabecera del vídeo: ${describe(bytes)}")
                 return
             }
             val whole = info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0
+            // Each whole frame carries what is needed to decode it, as the bike's own app sends
+            // them: a bike that missed the first one, or started over, still gets a picture.
+            val h = header
+            val frame = if (whole && h != null) withHeader(h, bytes) else bytes
+            if (whole && keyframesTold < KEYFRAMES_TOLD) {
+                keyframesTold++
+                log("imagen completa ${keyframesTold}: ${frame.size} bytes, partes ${nalTypes(frame).joinToString(",")}")
+            }
             // Checking and adding in one go, so fresh() cannot empty the queue in between.
             synchronized(queue) {
                 // The bike is slower than the encoder, or has stopped asking: start over from a
@@ -318,25 +357,13 @@ class MirrorPicture(
                 if (chunks.size > BACKLOG) {
                     chunks.clear()
                     waitingForWholeFrame = true
-                    runCatching {
-                        codec.setParameters(Bundle().apply { putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0) })
-                    }
+                    askWholeFrame(codec)
                 }
                 if (waitingForWholeFrame) {
                     if (!whole) return
                     waitingForWholeFrame = false
-                    val h = header
-                    if (h != null && h.isNotEmpty()) {
-                        val combined = ByteArray(h.size + bytes.size)
-                        System.arraycopy(h, 0, combined, 0, h.size)
-                        System.arraycopy(bytes, 0, combined, h.size, bytes.size)
-                        chunks += combined
-                    } else {
-                        chunks += bytes
-                    }
-                } else {
-                    chunks += bytes
                 }
+                chunks += frame
             }
         }
 
@@ -349,11 +376,66 @@ class MirrorPicture(
             if (header != null) return
             val sps = format.getByteBuffer("csd-0") ?: return
             val pps = format.getByteBuffer("csd-1") ?: return
-            header = ByteArray(sps.remaining() + pps.remaining()).also {
+            val made = ByteArray(sps.remaining() + pps.remaining()).also {
                 sps.duplicate().get(it, 0, sps.remaining())
                 pps.duplicate().get(it, sps.remaining(), pps.remaining())
             }
+            header = made
+            log("cabecera del vídeo (del formato): ${describe(made)}")
         }
+    }
+
+    /**
+     * [frame] with [header] in it unless it has its own: after an access unit delimiter if it
+     * starts with one, since nothing may come before that.
+     */
+    private fun withHeader(header: ByteArray, frame: ByteArray): ByteArray {
+        val types = nalTypes(frame)
+        if (SPS in types) return frame
+        if (types.firstOrNull() != AUD) return header + frame
+        // Where the unit after the delimiter starts, with its start code (3 or 4 bytes).
+        val next = (4 until frame.size - 2).firstOrNull {
+            frame[it].toInt() == 0 && frame[it + 1].toInt() == 0 && frame[it + 2].toInt() == 1
+        }?.let { if (frame[it - 1].toInt() == 0) it - 1 else it } ?: return header + frame
+        return frame.copyOfRange(0, next) + header + frame.copyOfRange(next, frame.size)
+    }
+
+    /**
+     * The kinds of the NAL units in [bytes], by their Annex-B start codes, up to the first piece
+     * of picture: whatever has to come before it is there, and a whole frame is long to walk.
+     */
+    private fun nalTypes(bytes: ByteArray): List<Int> {
+        val types = ArrayList<Int>()
+        var i = 0
+        while (i + 3 < bytes.size && types.size < 12) {
+            if (bytes[i].toInt() == 0 && bytes[i + 1].toInt() == 0 && bytes[i + 2].toInt() == 1) {
+                val type = bytes[i + 3].toInt() and 0x1F
+                types += type
+                if (type in 1..5) break
+                i += 3
+            }
+            i++
+        }
+        return types
+    }
+
+    /** Profile and level from the SPS in [header], which is what decides if the bike can play it. */
+    private fun describe(header: ByteArray): String {
+        val types = nalTypes(header)
+        val at = (0 until header.size - 6).firstOrNull {
+            header[it].toInt() == 0 && header[it + 1].toInt() == 0 && header[it + 2].toInt() == 1 &&
+                header[it + 3].toInt() and 0x1F == SPS
+        }
+        val profile = at?.let {
+            when (val idc = header[it + 4].toInt() and 0xFF) {
+                66 -> if (header[it + 5].toInt() and 0x40 != 0) "básico restringido" else "básico"
+                77 -> "principal"
+                100 -> "alto"
+                else -> "perfil $idc"
+            }
+        } ?: "sin SPS"
+        val level = at?.let { (header[it + 6].toInt() and 0xFF) / 10.0 }
+        return "$profile, nivel ${level ?: "?"}, ${header.size} bytes, partes ${types.joinToString(",")}"
     }
 
     private companion object {
@@ -363,5 +445,11 @@ class MirrorPicture(
         const val BACKLOG = 15
         /** [appOn] when the user took the app to the phone. */
         const val BY_USER = -2
+        /** NAL kind of an SPS. */
+        const val SPS = 7
+        /** NAL kind of an access unit delimiter. */
+        const val AUD = 9
+        /** The first whole frames of each encoder that get a line in the record. */
+        const val KEYFRAMES_TOLD = 3
     }
 }

@@ -12,6 +12,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
+import android.util.LruCache
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
@@ -115,6 +116,9 @@ class MainActivity : ComponentActivity() {
     /** Whether Android may put the app to sleep with the phone locked; checked on every return. */
     private val batteryFree = mutableStateOf(true)
 
+    /** USB debugging is off, so ADB stops when wireless debugging does; checked on every return. */
+    private val usbOff = mutableStateOf(false)
+
     private enum class Page { HOME, ADB, LOG }
 
     /** A permission the bike needs was refused: said on the home screen, with a way to Settings. */
@@ -203,6 +207,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         ShellLink.refresh()
+        usbOff.value = !ShellLink.usbDebuggingOn()
         batteryFree.value = ignoringBatteryOptimizations()
         if (moto.missingPermissions().isEmpty()) refused.value = false
         if (!moto.running.value && moto.forgetMissingApp()) {
@@ -252,7 +257,7 @@ class MainActivity : ComponentActivity() {
         val adbMessage = ShellLink.message.value?.read(this).orEmpty()
         val adbMissing = !adbReady && !paired
         val sizeName = SIZES.firstOrNull { it.first == dpi }?.let { stringResource(it.second) } ?: stringResource(R.string.size_dpi, dpi)
-        val appName = chosen?.let(::label)
+        val appName = remember(chosen) { chosen?.let(::label) }
         var picking by rememberSaveable { mutableStateOf(false) }
         var showBike by rememberSaveable { mutableStateOf(false) }
 
@@ -319,6 +324,9 @@ class MainActivity : ComponentActivity() {
                     )
                     chosen == null -> StatusPanel(
                         Tone.NEUTRAL, stringResource(R.string.status_no_app), stringResource(R.string.status_no_app_detail), Icons.Navigation
+                    )
+                    usbOff.value -> StatusPanel(
+                        Tone.WARN, stringResource(R.string.usb_debugging_off), stringResource(R.string.usb_debugging_off_detail), Icons.Code
                     )
                     else -> StatusPanel(
                         Tone.GOOD, stringResource(R.string.status_ready), stringResource(R.string.status_ready_detail), Icons.Check
@@ -536,13 +544,20 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** Loaded off the main thread: some launchers' icons are slow to draw. */
+    /**
+     * Loaded off the main thread, since some launchers' icons are slow to draw, and kept: the
+     * list of apps would draw each one again every time it scrolls into view.
+     */
     @Composable
-    private fun appIcon(pkg: String): ImageBitmap? = produceState<ImageBitmap?>(null, pkg) {
-        value = withContext(Dispatchers.IO) {
+    private fun appIcon(pkg: String): ImageBitmap? = produceState(icons.get(pkg), pkg) {
+        // The state outlives a change of app, holding the last one's icon: always set it anew.
+        value = icons.get(pkg) ?: withContext(Dispatchers.IO) {
             runCatching { packageManager.getApplicationIcon(pkg).toBitmap(96, 96).asImageBitmap() }.getOrNull()
+                ?.also { icons.put(pkg, it) }
         }
     }.value
+
+    private val icons = LruCache<String, ImageBitmap>(64)
 
     @Composable
     private fun BikeDialog(bike: BikeQr, running: Boolean, onDismiss: () -> Unit) {

@@ -1,4 +1,6 @@
-# Proguard / R8 rules for Motocom
+# Names stay readable: the record from a phone far away shows exception and class names.
+-dontobfuscate
+-keepattributes SourceFile,LineNumberTable
 
 # Crucial: com.motocom.shell is executed out-of-process via ADB 'app_process'
 -keep class com.motocom.shell.** { *; }
@@ -18,9 +20,9 @@
 -keep class org.conscrypt.** { *; }
 -dontwarn org.conscrypt.**
 
-# libadb
--keep class io.github.muntashirakon.adb.** { *; }
--dontwarn io.github.muntashirakon.adb.**
+# Pairing with ADB: native code bound by name, and Conscrypt looked up by name in libadb.
+-keep class io.github.muntashirakon.** { *; }
+-dontwarn io.github.muntashirakon.**
 
 # ZXing QR scanning
 -keep class com.journeyapps.barcodescanner.** { *; }

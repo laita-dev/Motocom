@@ -25,7 +25,7 @@ object ShellMain {
     fun main(args: Array<String>) {
         try {
             check(android.os.Process.myUid() == 2000 || android.os.Process.myUid() == 0)
-            Looper.prepareMainLooper()
+            if (Looper.myLooper() == null) Looper.prepare()
             val activityThread = Class.forName("android.app.ActivityThread")
             val thread = activityThread.getMethod("systemMain").invoke(null)
             val system = activityThread.getMethod("getSystemContext").invoke(thread) as Context
@@ -80,12 +80,8 @@ object ShellMain {
         }
     }
 
-    private fun installed(pkgName: String): Boolean = runCatching {
-        val pm = ProcessBuilder("pm", "path", pkgName).redirectErrorStream(true).start()
-        val said = pm.inputStream.bufferedReader().readText()
-        pm.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)
-        said.contains("package:")
-    }.getOrDefault(true)
+    /** Not knowing counts as installed: forgetting the pairing of an installed app costs more. */
+    private fun installed(pkgName: String): Boolean = exec(5, "pm", "path", pkgName)?.contains("package:") ?: true
 
     /** /proc/<pid> belongs to the uid that runs it; the shell may see every process. */
     private fun appRunning(uid: Int): Boolean =
