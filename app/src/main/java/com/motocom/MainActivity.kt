@@ -71,6 +71,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -78,6 +79,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -85,6 +87,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.app.NotificationManagerCompat
@@ -108,6 +111,7 @@ import com.motocom.ui.StatusPanel
 import com.motocom.ui.Tone
 import com.motocom.ui.TopBar
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
@@ -262,7 +266,7 @@ class MainActivity : ComponentActivity() {
         var showBike by rememberSaveable { mutableStateOf(false) }
 
         Column(Modifier.fillMaxSize()) {
-            TopBar("Motocom", logo = {
+            TopBar(stringResource(R.string.app_name), logo = {
                 // The launcher icon, shaped as the phone's launcher shapes it.
                 appIcon(packageName)?.let { Image(it, null, Modifier.size(36.dp).clip(RoundedCornerShape(10.dp))) }
             }) {
@@ -530,6 +534,95 @@ class MainActivity : ComponentActivity() {
                     Callout(stringResource(R.string.size_warning))
                     Button(onClick = ::connect, big, shape = shape) { Text(stringResource(R.string.connect), fontSize = 16.sp, fontWeight = FontWeight.SemiBold) }
                 }
+            }
+            UpdateFooter()
+        }
+    }
+
+    @Composable
+    private fun UpdateFooter() {
+        val updateState by UpdateManager.state
+        val scope = rememberCoroutineScope()
+        val context = LocalContext.current
+
+        Column(
+            Modifier.fillMaxWidth().padding(top = 4.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center,
+                modifier = Modifier.clickable {
+                    if (updateState !is UpdateState.Checking && updateState !is UpdateState.Downloading) {
+                        scope.launch { UpdateManager.checkForUpdates(BuildConfig.VERSION_NAME) }
+                    }
+                }.padding(horizontal = 12.dp, vertical = 4.dp)
+            ) {
+                Text(
+                    text = "${stringResource(R.string.app_name)} v${BuildConfig.VERSION_NAME} • dev",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = Palette.Muted
+                )
+                Spacer(Modifier.width(6.dp))
+                when (updateState) {
+                    is UpdateState.Checking -> {
+                        Text(stringResource(R.string.checking_updates), style = MaterialTheme.typography.labelSmall, color = Palette.Primary)
+                    }
+                    is UpdateState.UpToDate -> {
+                        Text(stringResource(R.string.update_up_to_date), style = MaterialTheme.typography.labelSmall, color = Palette.Good)
+                    }
+                    else -> {
+                        Text(stringResource(R.string.check_updates), style = MaterialTheme.typography.labelSmall, color = Palette.Primary, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            }
+
+            when (val current = updateState) {
+                is UpdateState.Available -> {
+                    AlertDialog(
+                        onDismissRequest = { UpdateManager.state.value = UpdateState.Idle },
+                        containerColor = Palette.SurfaceHigh,
+                        title = { Text(stringResource(R.string.update_available)) },
+                        text = {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text("Versión: ${current.version}", fontWeight = FontWeight.Bold, color = Palette.Text)
+                                if (current.notes.isNotEmpty()) {
+                                    Text(current.notes, style = MaterialTheme.typography.bodySmall, color = Palette.Muted)
+                                }
+                            }
+                        },
+                        confirmButton = {
+                            Button(onClick = {
+                                scope.launch { UpdateManager.downloadAndInstall(context, current.downloadUrl) }
+                            }) {
+                                Text(stringResource(R.string.download_and_install))
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { UpdateManager.state.value = UpdateState.Idle }) {
+                                Text(stringResource(R.string.close))
+                            }
+                        }
+                    )
+                }
+                is UpdateState.Downloading -> {
+                    Text(
+                        stringResource(R.string.downloading_update, current.progress),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Palette.Good
+                    )
+                }
+                is UpdateState.Error -> {
+                    Text(
+                        current.message,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Palette.Bad,
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                        textAlign = TextAlign.Center
+                    )
+                }
+                else -> {}
             }
         }
     }

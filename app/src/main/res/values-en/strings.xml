@@ -1,6 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Motocom</string>
+    <!-- Updates -->
+    <string name="check_updates">Check for updates</string>
+    <string name="checking_updates">Checking for updates…</string>
+    <string name="update_available">New version available!</string>
+    <string name="update_up_to_date">You are on the latest version</string>
+    <string name="download_and_install">Download &amp; install</string>
+    <string name="downloading_update">Downloading update (%1$d%%)…</string>
     <!-- Home screen -->
     <string name="log">Log</string>
     <string name="share_log">Share log</string>

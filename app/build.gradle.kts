@@ -43,7 +43,7 @@ android {
         debug {
             applicationIdSuffix = ".dev"
             versionNameSuffix = "-dev"
-            resValue("string", "app_name", "Motocom_dev")
+            resValue("string", "app_name", "Motocom-dev")
             buildConfigField("boolean", "CABLE_TESTS", "true")
         }
         release {
