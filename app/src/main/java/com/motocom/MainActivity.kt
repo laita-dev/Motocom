@@ -439,55 +439,219 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun QuickAppSwitcher(chosen: String?, onChoose: (String) -> Unit) {
-        val apps = remember { NAV_APPS.filter { pkg -> launchable(pkg) } }
-        if (apps.isEmpty()) return
+        val configuredQuickApps by moto.quickApps
+        var editingQuickApps by rememberSaveable { mutableStateOf(false) }
 
-        Section(stringResource(R.string.section_quick_apps)) {
+        val apps = remember(configuredQuickApps) {
+            configuredQuickApps.filter { pkg -> launchable(pkg) }
+        }
+
+        Column(Modifier.fillMaxWidth()) {
             Row(
-                Modifier.fillMaxWidth().padding(12.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                Modifier.fillMaxWidth().padding(start = 4.dp, bottom = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                apps.forEach { pkg ->
-                    val isSelected = pkg == chosen
-                    Column(
-                        Modifier.weight(1f).clip(RoundedCornerShape(12.dp))
-                            .background(if (isSelected) Palette.Primary.copy(alpha = 0.25f) else Palette.SurfaceHigh)
-                            .clickable { onChoose(pkg) }
-                            .padding(8.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        AppIcon(pkg)
+                Text(
+                    stringResource(R.string.section_quick_apps).uppercase(),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = Palette.Muted,
+                    letterSpacing = 1.2.sp
+                )
+                TextButton(
+                    onClick = { editingQuickApps = true },
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                ) {
+                    Text(stringResource(R.string.edit_quick_apps), style = MaterialTheme.typography.labelMedium, color = Palette.Primary)
+                }
+            }
+            Surface(shape = RoundedCornerShape(20.dp), color = Palette.Surface, modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    Modifier.fillMaxWidth().padding(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    if (apps.isEmpty()) {
                         Text(
-                            label(pkg),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (isSelected) Palette.Primary else Palette.Text,
-                            maxLines = 1
+                            stringResource(R.string.edit_quick_apps_title),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Palette.Muted,
+                            modifier = Modifier.padding(8.dp)
                         )
+                    } else {
+                        apps.forEach { pkg ->
+                            val isSelected = pkg == chosen
+                            Column(
+                                Modifier.weight(1f).clip(RoundedCornerShape(12.dp))
+                                    .background(if (isSelected) Palette.Primary.copy(alpha = 0.25f) else Palette.SurfaceHigh)
+                                    .clickable { onChoose(pkg) }
+                                    .padding(8.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                AppIcon(pkg)
+                                Text(
+                                    label(pkg),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (isSelected) Palette.Primary else Palette.Text,
+                                    maxLines = 1
+                                )
+                            }
+                        }
                     }
                 }
             }
         }
+
+        if (editingQuickApps) {
+            QuickAppPicker(onDismiss = { editingQuickApps = false })
+        }
+    }
+
+    @Composable
+    private fun QuickAppPicker(onDismiss: () -> Unit) {
+        val configuredQuickApps by moto.quickApps
+        val allApps = produceState(emptyList<Pair<String, String>>()) {
+            value = withContext(Dispatchers.IO) { launchableApps() }
+        }.value
+
+        AlertDialog(
+            onDismissRequest = onDismiss,
+            containerColor = Palette.SurfaceHigh,
+            title = { Text(stringResource(R.string.edit_quick_apps_title)) },
+            text = {
+                Column(
+                    Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    allApps.forEach { (pkg, name) ->
+                        val isChecked = configuredQuickApps.contains(pkg)
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable { moto.toggleQuickApp(pkg) }
+                                .background(if (isChecked) Palette.Primary.copy(alpha = 0.15f) else androidx.compose.ui.graphics.Color.Transparent)
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                AppIcon(pkg)
+                                Text(name, style = MaterialTheme.typography.bodyMedium, color = Palette.Text)
+                            }
+                            if (isChecked) {
+                                Icon(Icons.Check, null, tint = Palette.Primary, modifier = Modifier.size(20.dp))
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = onDismiss) { Text(stringResource(R.string.close)) }
+            }
+        )
     }
 
     @Composable
     private fun BitrateChooser(bitrate: Int) {
         val BITRATES = listOf(
-            0 to R.string.bitrate_auto,
-            2000 to R.string.bitrate_2mbps,
-            4000 to R.string.bitrate_4mbps,
-            6000 to R.string.bitrate_6mbps,
-            8000 to R.string.bitrate_8mbps
+            0 to (R.string.bitrate_auto to "Usar la tasa recomendada por la moto"),
+            2000 to (R.string.bitrate_2mbps to "Menor consumo de batería y temperatura"),
+            4000 to (R.string.bitrate_4mbps to "Calidad estándar equilibrada"),
+            6000 to (R.string.bitrate_6mbps to "Alta nitidez para mapas detallados"),
+            8000 to (R.string.bitrate_8mbps to "Máxima calidad (requiere buena red)")
         )
 
+        var expanded by remember { mutableStateOf(false) }
+        val currentOption = BITRATES.firstOrNull { it.first == bitrate } ?: BITRATES[0]
+
         Section(stringResource(R.string.section_bitrate)) {
-            Column(Modifier.padding(16.dp)) {
-                Segmented(
-                    options = BITRATES.map { stringResource(it.second) },
-                    selected = BITRATES.indexOfFirst { it.first == bitrate }.coerceAtLeast(0),
-                    enabled = true
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Palette.SurfaceHigh)
+                        .clickable { expanded = !expanded }
+                        .padding(14.dp)
                 ) {
-                    moto.setCustomBitrate(BITRATES[it].first)
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                stringResource(currentOption.second.first),
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Palette.Text
+                            )
+                            Text(
+                                currentOption.second.second,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Palette.Muted
+                            )
+                        }
+                        Icon(
+                            imageVector = if (expanded) Icons.ExpandMore else Icons.Chevron,
+                            contentDescription = null,
+                            tint = Palette.Primary,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                }
+
+                if (expanded) {
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Palette.Surface)
+                            .padding(vertical = 4.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        BITRATES.forEach { (kbps, info) ->
+                            val isSelected = kbps == bitrate
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        moto.setCustomBitrate(kbps)
+                                        expanded = false
+                                    }
+                                    .background(if (isSelected) Palette.Primary.copy(alpha = 0.15f) else androidx.compose.ui.graphics.Color.Transparent)
+                                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        stringResource(info.first),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                        color = if (isSelected) Palette.Primary else Palette.Text
+                                    )
+                                    Text(
+                                        info.second,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = Palette.Muted
+                                    )
+                                }
+                                if (isSelected) {
+                                    Icon(
+                                        imageVector = Icons.Check,
+                                        contentDescription = null,
+                                        tint = Palette.Primary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

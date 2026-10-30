@@ -3,6 +3,8 @@
     <string name="app_name">Motocom</string>
     <!-- Diagnostics & Quick Apps -->
     <string name="section_quick_apps">Quick App Switcher</string>
+    <string name="edit_quick_apps">Customize</string>
+    <string name="edit_quick_apps_title">Select favorite apps</string>
     <string name="section_diagnostics">Real-Time Diagnostics</string>
     <string name="section_bitrate">Video Quality / Bitrate</string>
     <string name="bitrate_auto">Auto (Bike)</string>

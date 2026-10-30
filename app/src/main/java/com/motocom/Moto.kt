@@ -65,6 +65,9 @@ class Moto private constructor(private val context: Context) {
     /** Custom video bitrate override in kbps (0 = default/auto from bike). */
     val customBitrate = mutableIntStateOf(prefs.getInt(KEY_BITRATE, 0))
 
+    /** Favorite apps for Quick App Switcher. */
+    val quickApps = mutableStateOf(prefs.getStringSet(KEY_QUICK_APPS, DEFAULT_QUICK_APPS) ?: DEFAULT_QUICK_APPS)
+
     /** The bike whose QR code was last read off its screen; null until one is read. */
     val bike = mutableStateOf(prefs.getString(KEY_QR, null)?.let(BikeQr::parse))
 
@@ -247,6 +250,17 @@ class Moto private constructor(private val context: Context) {
     fun setCustomBitrate(value: Int) {
         prefs.edit().putInt(KEY_BITRATE, value).apply()
         customBitrate.intValue = value
+    }
+
+    fun toggleQuickApp(pkg: String) {
+        val current = quickApps.value.toMutableSet()
+        if (current.contains(pkg)) {
+            if (current.size > 1) current.remove(pkg)
+        } else {
+            current.add(pkg)
+        }
+        prefs.edit().putStringSet(KEY_QUICK_APPS, current).apply()
+        quickApps.value = current
     }
 
     /** The chosen app's package and the activity it opens with. */
@@ -686,7 +700,9 @@ class Moto private constructor(private val context: Context) {
         private const val KEY_APP = "app"
         private const val KEY_DPI = "ppp"
         private const val KEY_BITRATE = "custom_bitrate"
+        private const val KEY_QUICK_APPS = "quick_apps"
         private const val KEY_QR = "qr"
+        private val DEFAULT_QUICK_APPS = setOf("com.waze", "com.google.android.apps.maps", "net.osmand.plus", "com.spotify.music")
         /** The bike (its network's name) last got onto as an ordinary wifi, so it goes that way first. */
         private const val KEY_ROUTE_WIFI = "camino_wifi"
         /** The bike's network Android has already let this app join. */
