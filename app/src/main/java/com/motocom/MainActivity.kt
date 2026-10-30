@@ -370,10 +370,21 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
+                val customBitrate by moto.customBitrate
+
+                QuickAppSwitcher(chosen) { pkg ->
+                    moto.choose(pkg)
+                    if (running) moto.toBike()
+                }
+
                 if (running) {
-                    if (state == BikeState.SHOWING) MoveApp(place)
+                    if (state == BikeState.SHOWING) {
+                        MoveApp(place)
+                        RealtimeDiagnostics()
+                    }
                 } else {
                     SizeChooser(dpi)
+                    BitrateChooser(customBitrate)
                 }
 
                 if (!batteryFree.value) {
@@ -397,6 +408,89 @@ class MainActivity : ComponentActivity() {
             }
         }
         if (showBike) bike?.let { BikeDialog(it, running) { showBike = false } }
+    }
+
+    @Composable
+    private fun RealtimeDiagnostics() {
+        val fps = MirrorPicture.statsFps.floatValue
+        val bitrate = MirrorPicture.statsBitrateKbps.intValue
+        val backlog = MirrorPicture.statsBacklog.intValue
+
+        Section(stringResource(R.string.section_diagnostics)) {
+            Row(
+                Modifier.fillMaxWidth().padding(16.dp),
+                horizontalArrangement = Arrangement.SpaceAround
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("${fps.toInt()} FPS", style = MaterialTheme.typography.titleMedium, color = Palette.Good, fontWeight = FontWeight.Bold)
+                    Text("FPS", style = MaterialTheme.typography.labelSmall, color = Palette.Muted)
+                }
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("${bitrate} kbps", style = MaterialTheme.typography.titleMedium, color = Palette.Primary, fontWeight = FontWeight.Bold)
+                    Text("Bitrate", style = MaterialTheme.typography.labelSmall, color = Palette.Muted)
+                }
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("$backlog / 15", style = MaterialTheme.typography.titleMedium, color = if (backlog > 8) Palette.Warn else Palette.Good, fontWeight = FontWeight.Bold)
+                    Text("Buffer", style = MaterialTheme.typography.labelSmall, color = Palette.Muted)
+                }
+            }
+        }
+    }
+
+    @Composable
+    private fun QuickAppSwitcher(chosen: String?, onChoose: (String) -> Unit) {
+        val apps = remember { NAV_APPS.filter { pkg -> launchable(pkg) } }
+        if (apps.isEmpty()) return
+
+        Section(stringResource(R.string.section_quick_apps)) {
+            Row(
+                Modifier.fillMaxWidth().padding(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                apps.forEach { pkg ->
+                    val isSelected = pkg == chosen
+                    Column(
+                        Modifier.weight(1f).clip(RoundedCornerShape(12.dp))
+                            .background(if (isSelected) Palette.Primary.copy(alpha = 0.25f) else Palette.SurfaceHigh)
+                            .clickable { onChoose(pkg) }
+                            .padding(8.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        AppIcon(pkg)
+                        Text(
+                            label(pkg),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (isSelected) Palette.Primary else Palette.Text,
+                            maxLines = 1
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    @Composable
+    private fun BitrateChooser(bitrate: Int) {
+        val BITRATES = listOf(
+            0 to R.string.bitrate_auto,
+            2000 to R.string.bitrate_2mbps,
+            4000 to R.string.bitrate_4mbps,
+            6000 to R.string.bitrate_6mbps,
+            8000 to R.string.bitrate_8mbps
+        )
+
+        Section(stringResource(R.string.section_bitrate)) {
+            Column(Modifier.padding(16.dp)) {
+                Segmented(
+                    options = BITRATES.map { stringResource(it.second) },
+                    selected = BITRATES.indexOfFirst { it.first == bitrate }.coerceAtLeast(0),
+                    enabled = true
+                ) {
+                    moto.setCustomBitrate(BITRATES[it].first)
+                }
+            }
+        }
     }
 
     /** ADB, out of the way: green when on, and a way into its own screen. */

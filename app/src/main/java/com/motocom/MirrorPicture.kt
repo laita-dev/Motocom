@@ -7,7 +7,10 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.SystemClock
 import android.view.Surface
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import com.motocom.bike.BikePicture
 import com.motocom.bike.PictureRequest
 import com.motocom.shell.ShellLink
@@ -39,6 +42,7 @@ class MirrorPicture(
     /** Which app goes to the bike: its package and launcher activity. */
     private val app: () -> Pair<String, String>?,
     private val dpi: () -> Int,
+    private val customBitrateKbps: () -> Int = { 0 },
     /** Each time the app moves, or failed to; from any thread. */
     private val onApp: (AppPlace) -> Unit = {}
 ) : BikePicture {
@@ -84,6 +88,10 @@ class MirrorPicture(
     /** The first whole frames of each encoder, told in the record; only on the encoder's thread. */
     private var keyframesTold = 0
 
+    private var frameCount = 0
+    private var bytesCount = 0
+    private var lastStatsTime = 0L
+
     @Synchronized
     override fun start(request: PictureRequest): Boolean {
         if (released) return false
@@ -99,7 +107,8 @@ class MirrorPicture(
         return try {
             fun format(baseline: Boolean) = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height).apply {
                 setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-                setInteger(MediaFormat.KEY_BIT_RATE, request.bitRate)
+                val targetBitrate = customBitrateKbps().let { if (it > 0) it * 1000 else request.bitRate }
+                setInteger(MediaFormat.KEY_BIT_RATE, targetBitrate)
                 setInteger(MediaFormat.KEY_FRAME_RATE, if (request.fps > 0) request.fps else FPS)
                 setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 3)
                 // A still map gives the encoder nothing to do; this keeps frames coming.
@@ -336,6 +345,21 @@ class MirrorPicture(
                 runCatching { codec.releaseOutputBuffer(index, false) }
             }
             if (bytes.isEmpty() || codec !== this@MirrorPicture.codec) return
+
+            val now = SystemClock.elapsedRealtime()
+            frameCount++
+            bytesCount += bytes.size
+            if (now - lastStatsTime >= 1000) {
+                val dt = (now - lastStatsTime) / 1000.0f
+                if (dt > 0) {
+                    statsFps.floatValue = frameCount / dt
+                    statsBitrateKbps.intValue = ((bytesCount * 8 / 1000.0) / dt).toInt()
+                }
+                frameCount = 0
+                bytesCount = 0
+                lastStatsTime = now
+            }
+
             if (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
                 header = bytes
                 log("cabecera del vídeo: ${describe(bytes)}")
@@ -364,6 +388,7 @@ class MirrorPicture(
                     waitingForWholeFrame = false
                 }
                 chunks += frame
+                statsBacklog.intValue = chunks.size
             }
         }
 
@@ -438,7 +463,12 @@ class MirrorPicture(
         return "$profile, nivel ${level ?: "?"}, ${header.size} bytes, partes ${types.joinToString(",")}"
     }
 
-    private companion object {
+    companion object {
+        /** Real-time statistics */
+        val statsFps = mutableFloatStateOf(0f)
+        val statsBitrateKbps = mutableIntStateOf(0)
+        val statsBacklog = mutableIntStateOf(0)
+
         /** The bike asks frame by frame and leaves the pace to the phone. */
         const val FPS = 30
         /** Half a second of frames nobody came for (prevents navigation lag behind reality). */

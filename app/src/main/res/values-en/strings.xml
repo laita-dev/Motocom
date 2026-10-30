@@ -1,6 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Motocom</string>
+    <!-- Diagnostics & Quick Apps -->
+    <string name="section_quick_apps">Quick App Switcher</string>
+    <string name="section_diagnostics">Real-Time Diagnostics</string>
+    <string name="section_bitrate">Video Quality / Bitrate</string>
+    <string name="bitrate_auto">Auto (Bike)</string>
+    <string name="bitrate_2mbps">2 Mbps (Low temp / Battery)</string>
+    <string name="bitrate_4mbps">4 Mbps (Standard)</string>
+    <string name="bitrate_6mbps">6 Mbps (High quality)</string>
+    <string name="bitrate_8mbps">8 Mbps (Max quality)</string>
     <!-- Updates -->
     <string name="check_updates">Check for updates</string>
     <string name="checking_updates">Checking for updates…</string>

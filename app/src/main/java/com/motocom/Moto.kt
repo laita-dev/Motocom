@@ -62,6 +62,9 @@ class Moto private constructor(private val context: Context) {
     /** How big things look on the bike: higher, bigger letters and less map. */
     val dpi = mutableIntStateOf(prefs.getInt(KEY_DPI, DEFAULT_DPI))
 
+    /** Custom video bitrate override in kbps (0 = default/auto from bike). */
+    val customBitrate = mutableIntStateOf(prefs.getInt(KEY_BITRATE, 0))
+
     /** The bike whose QR code was last read off its screen; null until one is read. */
     val bike = mutableStateOf(prefs.getString(KEY_QR, null)?.let(BikeQr::parse))
 
@@ -241,6 +244,11 @@ class Moto private constructor(private val context: Context) {
         dpi.intValue = value
     }
 
+    fun setCustomBitrate(value: Int) {
+        prefs.edit().putInt(KEY_BITRATE, value).apply()
+        customBitrate.intValue = value
+    }
+
     /** The chosen app's package and the activity it opens with. */
     private fun chosenComponent(): Pair<String, String>? {
         val pkg = chosenApp.value ?: return null
@@ -254,7 +262,7 @@ class Moto private constructor(private val context: Context) {
         appPlace.value = AppPlace.NOWHERE
         ShellLink.refresh()
         var made: MirrorPicture? = null
-        made = MirrorPicture(::log, ::chosenComponent, { dpi.intValue }) { place ->
+        made = MirrorPicture(::log, ::chosenComponent, { dpi.intValue }, { customBitrate.intValue }) { place ->
             // A picture let go of says so late; only the current one speaks for the run.
             main.post { if (running.value && picture === made) appPlace.value = place }
         }
@@ -677,6 +685,7 @@ class Moto private constructor(private val context: Context) {
 
         private const val KEY_APP = "app"
         private const val KEY_DPI = "ppp"
+        private const val KEY_BITRATE = "custom_bitrate"
         private const val KEY_QR = "qr"
         /** The bike (its network's name) last got onto as an ordinary wifi, so it goes that way first. */
         private const val KEY_ROUTE_WIFI = "camino_wifi"
