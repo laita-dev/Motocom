@@ -15,8 +15,8 @@ android {
         // the phone locked, Android 13.
         minSdk = 29
         targetSdk = 36
-        versionCode = 22
-        versionName = "0.21.1"
+        versionCode = 23
+        versionName = "0.21.2"
         buildConfigField("String", "OFFICIAL_VERSION", "\"0.19\"")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // Phones only: the x86 copies of the native libraries are for emulators.
@@ -34,13 +34,10 @@ android {
         ?.let { file -> Properties().apply { file.inputStream().use(::load) } }
     signingConfigs {
         getByName("debug") {
-            val ks = file("debug.keystore")
-            if (ks.exists()) {
-                storeFile = ks
-                storePassword = "android"
-                keyAlias = "androiddebugkey"
-                keyPassword = "android"
-            }
+            storeFile = rootProject.file("keystore/debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
         }
         if (signing != null) create("release") {
             storeFile = rootProject.file(signing.getProperty("storeFile"))
