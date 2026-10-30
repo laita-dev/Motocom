@@ -68,6 +68,7 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -270,8 +271,11 @@ class MainActivity : ComponentActivity() {
                 // The launcher icon, shaped as the phone's launcher shapes it.
                 appIcon(packageName)?.let { Image(it, null, Modifier.size(36.dp).clip(RoundedCornerShape(10.dp))) }
             }) {
-                AdbChip(adbReady, paired, adbBusy, waiting && adbFailed, openAdb)
-                IconButton(onClick = openLog) { Icon(Icons.Log, stringResource(R.string.log)) }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    BatteryChip()
+                    AdbChip(adbReady, paired, adbBusy, waiting && adbFailed, openAdb)
+                    IconButton(onClick = openLog) { Icon(Icons.Log, stringResource(R.string.log)) }
+                }
             }
             Column(
                 Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),
@@ -504,6 +508,29 @@ class MainActivity : ComponentActivity() {
 
         if (editingQuickApps) {
             QuickAppPicker(onDismiss = { editingQuickApps = false })
+        }
+    }
+
+    @Composable
+    private fun BatteryChip() {
+        val context = LocalContext.current
+        var level by remember { mutableIntStateOf(-1) }
+        LaunchedEffect(Unit) {
+            val bm = context.getSystemService(Context.BATTERY_SERVICE) as? android.os.BatteryManager
+            level = bm?.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: -1
+        }
+        if (level >= 0) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .clip(CircleShape)
+                    .background(Palette.SurfaceHigh)
+                    .padding(horizontal = 10.dp, vertical = 6.dp)
+            ) {
+                Text("🔋", fontSize = 12.sp)
+                Spacer(Modifier.width(4.dp))
+                Text("$level%", style = MaterialTheme.typography.labelMedium, color = Palette.Text)
+            }
         }
     }
 

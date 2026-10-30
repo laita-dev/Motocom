@@ -1,5 +1,6 @@
 package com.motocom
 
+import android.content.Context
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
@@ -43,6 +44,7 @@ class MirrorPicture(
     private val app: () -> Pair<String, String>?,
     private val dpi: () -> Int,
     private val customBitrateKbps: () -> Int = { 0 },
+    private val context: Context? = null,
     /** Each time the app moves, or failed to; from any thread. */
     private val onApp: (AppPlace) -> Unit = {}
 ) : BikePicture {
@@ -164,7 +166,7 @@ class MirrorPicture(
             }
             surface = input
             log("codificador ${encoder.name}: ${width}x$height a ${request.bitRate / 1000} kbit/s")
-            val framed = BlackEdges(input, width, height, log)
+            val framed = BlackEdges(input, width, height, context, log)
             edges = framed
 
             val id = shell.show(framed.surface, width, framed.inner, dpi())

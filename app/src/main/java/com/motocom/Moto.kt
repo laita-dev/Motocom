@@ -276,7 +276,7 @@ class Moto private constructor(private val context: Context) {
         appPlace.value = AppPlace.NOWHERE
         ShellLink.refresh()
         var made: MirrorPicture? = null
-        made = MirrorPicture(::log, ::chosenComponent, { dpi.intValue }, { customBitrate.intValue }) { place ->
+        made = MirrorPicture(::log, ::chosenComponent, { dpi.intValue }, { customBitrate.intValue }, context) { place ->
             // A picture let go of says so late; only the current one speaks for the run.
             main.post { if (running.value && picture === made) appPlace.value = place }
         }

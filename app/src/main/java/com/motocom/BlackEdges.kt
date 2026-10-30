@@ -29,6 +29,7 @@ class BlackEdges(
     target: Surface,
     private val width: Int,
     private val height: Int,
+    private val appContext: android.content.Context? = null,
     private val log: (String) -> Unit = {}
 ) {
 
