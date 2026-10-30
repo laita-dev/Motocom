@@ -33,6 +33,12 @@ android {
     val signing = rootProject.file("keystore.properties").takeIf { it.exists() }
         ?.let { file -> Properties().apply { file.inputStream().use(::load) } }
     signingConfigs {
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
         if (signing != null) create("release") {
             storeFile = rootProject.file(signing.getProperty("storeFile"))
             storePassword = signing.getProperty("storePassword")

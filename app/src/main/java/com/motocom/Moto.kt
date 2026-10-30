@@ -674,7 +674,7 @@ class Moto private constructor(private val context: Context) {
 
     private fun toast(text: String) = main.post { Toast.makeText(context, text, Toast.LENGTH_LONG).show() }
 
-    private fun log(line: String) {
+    fun log(line: String) {
         val stamped = "${STAMP.format(LocalDateTime.now())}  $line"
         disk.execute { runCatching { file.appendText(stamped + "\n") } }
         main.post {

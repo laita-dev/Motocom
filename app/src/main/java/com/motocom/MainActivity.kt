@@ -813,7 +813,7 @@ class MainActivity : ComponentActivity() {
                 horizontalArrangement = Arrangement.Center,
                 modifier = Modifier.clickable {
                     if (updateState !is UpdateState.Checking && updateState !is UpdateState.Downloading) {
-                        scope.launch { UpdateManager.checkForUpdates(BuildConfig.VERSION_NAME) }
+                        scope.launch { UpdateManager.checkForUpdates(context, BuildConfig.VERSION_NAME) }
                     }
                 }.padding(horizontal = 12.dp, vertical = 4.dp)
             ) {

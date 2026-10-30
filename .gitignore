@@ -6,6 +6,7 @@ local.properties
 *.apk
 *.jks
 *.keystore
+!app/debug.keystore
 AGENTS.md
 icono-antiguo.png
 Imagen de ChatGPT*.png

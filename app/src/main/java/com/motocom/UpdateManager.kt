@@ -29,17 +29,23 @@ object UpdateManager {
     val state = mutableStateOf<UpdateState>(UpdateState.Idle)
     private const val GITHUB_RELEASES_URL = "https://api.github.com/repos/laita-dev/Motocom/releases"
 
-    suspend fun checkForUpdates(currentVersion: String) {
+    suspend fun checkForUpdates(context: Context, currentVersion: String) {
         state.value = UpdateState.Checking
+        val moto = runCatching { Moto.get(context) }.getOrNull()
+        moto?.log("actualización: comprobando versiones en GitHub (actual: $currentVersion)")
         try {
             val (version, notes, apkUrl) = withContext(Dispatchers.IO) { fetchLatestRelease() }
             if (apkUrl.isNotEmpty() && isNewerVersion(version, currentVersion)) {
+                moto?.log("actualización: nueva versión disponible ($version)")
                 state.value = UpdateState.Available(version, notes, apkUrl)
             } else {
+                moto?.log("actualización: la app ya está en la versión más reciente ($version)")
                 state.value = UpdateState.UpToDate
             }
         } catch (e: Throwable) {
-            state.value = UpdateState.Error(e.message ?: "Error al comprobar actualizaciones")
+            val err = e.message ?: "Error al comprobar actualizaciones"
+            moto?.log("actualización fallo: $err")
+            state.value = UpdateState.Error(err)
         }
     }
 
@@ -99,9 +105,11 @@ object UpdateManager {
     suspend fun downloadAndInstall(context: Context, downloadUrl: String) {
         val updateDir = File(context.cacheDir, "updates").apply { mkdirs() }
         val apkFile = File(updateDir, "update.apk")
+        val moto = runCatching { Moto.get(context) }.getOrNull()
 
         try {
             state.value = UpdateState.Downloading(0)
+            moto?.log("actualización: iniciando descarga desde $downloadUrl")
             withContext(Dispatchers.IO) {
                 val url = URL(downloadUrl)
                 val conn = (url.openConnection() as HttpURLConnection).apply {
@@ -130,14 +138,18 @@ object UpdateManager {
                 }
             }
 
+            moto?.log("actualización: descarga completada (${apkFile.length()} bytes), abriendo instalador")
             state.value = UpdateState.ReadyToInstall(apkFile)
             installApk(context, apkFile)
         } catch (e: Throwable) {
-            state.value = UpdateState.Error("Error en la descarga: ${e.message}")
+            val err = "Error en la descarga: ${e.message}"
+            moto?.log("actualización fallo: $err")
+            state.value = UpdateState.Error(err)
         }
     }
 
     fun installApk(context: Context, file: File) {
+        val moto = runCatching { Moto.get(context) }.getOrNull()
         try {
             val apkUri = FileProvider.getUriForFile(
                 context,
@@ -150,8 +162,11 @@ object UpdateManager {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             context.startActivity(intent)
+            moto?.log("actualización: intención de instalación lanzada con éxito")
         } catch (e: Throwable) {
-            state.value = UpdateState.Error("No se pudo abrir el instalador: ${e.message}")
+            val err = "No se pudo abrir el instalador: ${e.message}"
+            moto?.log("actualización fallo: $err")
+            state.value = UpdateState.Error(err)
         }
     }
 }
