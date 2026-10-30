@@ -654,7 +654,7 @@ class MainActivity : ComponentActivity() {
                 }.padding(horizontal = 12.dp, vertical = 4.dp)
             ) {
                 Text(
-                    text = "${stringResource(R.string.app_name)} v${BuildConfig.VERSION_NAME} • dev",
+                    text = "Oficial: v${BuildConfig.OFFICIAL_VERSION} • Dev: v${BuildConfig.VERSION_NAME}",
                     style = MaterialTheme.typography.labelMedium,
                     color = Palette.Muted
                 )
