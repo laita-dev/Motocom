@@ -81,14 +81,18 @@ fun TopBar(
             logo()
             Spacer(Modifier.width(12.dp))
         }
-        Text(
-            title,
-            Modifier.weight(1f).semantics { heading() },
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.SemiBold,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
+        if (title.isNotEmpty()) {
+            Text(
+                title,
+                Modifier.weight(1f).semantics { heading() },
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        } else {
+            Spacer(Modifier.weight(1f))
+        }
         actions()
         Spacer(Modifier.width(4.dp))
     }

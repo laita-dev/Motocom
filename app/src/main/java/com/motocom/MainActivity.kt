@@ -2,9 +2,12 @@ package com.motocom
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.os.BatteryManager
 import android.os.Build
 import android.graphics.Color as AndroidColor
 import android.graphics.drawable.ColorDrawable
@@ -66,6 +69,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -89,9 +93,11 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.toBitmap
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
@@ -267,7 +273,7 @@ class MainActivity : ComponentActivity() {
         var showBike by rememberSaveable { mutableStateOf(false) }
 
         Column(Modifier.fillMaxSize()) {
-            TopBar(stringResource(R.string.app_name), logo = {
+            TopBar("", logo = {
                 // The launcher icon, shaped as the phone's launcher shapes it.
                 appIcon(packageName)?.let { Image(it, null, Modifier.size(36.dp).clip(RoundedCornerShape(10.dp))) }
             }) {
@@ -447,7 +453,7 @@ class MainActivity : ComponentActivity() {
         var editingQuickApps by rememberSaveable { mutableStateOf(false) }
 
         val apps = remember(configuredQuickApps) {
-            configuredQuickApps.filter { pkg -> launchable(pkg) }
+            configuredQuickApps.filter { pkg -> launchable(pkg) }.take(Moto.MAX_QUICK_APPS)
         }
 
         Column(Modifier.fillMaxWidth()) {
@@ -497,7 +503,8 @@ class MainActivity : ComponentActivity() {
                                     label(pkg),
                                     style = MaterialTheme.typography.labelSmall,
                                     color = if (isSelected) Palette.Primary else Palette.Text,
-                                    maxLines = 1
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
                         }
@@ -515,9 +522,35 @@ class MainActivity : ComponentActivity() {
     private fun BatteryChip() {
         val context = LocalContext.current
         var level by remember { mutableIntStateOf(-1) }
-        LaunchedEffect(Unit) {
-            val bm = context.getSystemService(Context.BATTERY_SERVICE) as? android.os.BatteryManager
-            level = bm?.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: -1
+        var charging by remember { mutableStateOf(false) }
+        DisposableEffect(context) {
+            fun update(intent: Intent?) {
+                if (intent != null) {
+                    val lvl = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+                    val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
+                    val status = intent.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
+                    charging = status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL
+                    if (lvl >= 0 && scale > 0) {
+                        level = (lvl * 100) / scale
+                        return
+                    }
+                }
+                val bm = context.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
+                level = bm?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: -1
+            }
+            val receiver = object : BroadcastReceiver() {
+                override fun onReceive(c: Context, intent: Intent) = update(intent)
+            }
+            val sticky = runCatching {
+                ContextCompat.registerReceiver(
+                    context,
+                    receiver,
+                    IntentFilter(Intent.ACTION_BATTERY_CHANGED),
+                    ContextCompat.RECEIVER_NOT_EXPORTED
+                )
+            }.getOrNull()
+            update(sticky)
+            onDispose { runCatching { context.unregisterReceiver(receiver) } }
         }
         if (level >= 0) {
             Row(
@@ -527,7 +560,7 @@ class MainActivity : ComponentActivity() {
                     .background(Palette.SurfaceHigh)
                     .padding(horizontal = 10.dp, vertical = 6.dp)
             ) {
-                Text("🔋", fontSize = 12.sp)
+                Text(if (charging) "⚡" else "🔋", fontSize = 12.sp)
                 Spacer(Modifier.width(4.dp))
                 Text("$level%", style = MaterialTheme.typography.labelMedium, color = Palette.Text)
             }
@@ -540,11 +573,12 @@ class MainActivity : ComponentActivity() {
         val allApps = produceState(emptyList<Pair<String, String>>()) {
             value = withContext(Dispatchers.IO) { launchableApps() }
         }.value
+        val limitReached = configuredQuickApps.size >= Moto.MAX_QUICK_APPS
 
         AlertDialog(
             onDismissRequest = onDismiss,
             containerColor = Palette.SurfaceHigh,
-            title = { Text(stringResource(R.string.edit_quick_apps_title)) },
+            title = { Text("${stringResource(R.string.edit_quick_apps_title)} (${configuredQuickApps.size}/${Moto.MAX_QUICK_APPS})") },
             text = {
                 Column(
                     Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState()),
@@ -552,11 +586,12 @@ class MainActivity : ComponentActivity() {
                 ) {
                     allApps.forEach { (pkg, name) ->
                         val isChecked = configuredQuickApps.contains(pkg)
+                        val canToggle = isChecked || !limitReached
                         Row(
                             Modifier
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(10.dp))
-                                .clickable { moto.toggleQuickApp(pkg) }
+                                .clickable(enabled = canToggle) { moto.toggleQuickApp(pkg) }
                                 .background(if (isChecked) Palette.Primary.copy(alpha = 0.15f) else androidx.compose.ui.graphics.Color.Transparent)
                                 .padding(horizontal = 12.dp, vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically,
@@ -564,10 +599,17 @@ class MainActivity : ComponentActivity() {
                         ) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                modifier = Modifier.weight(1f)
                             ) {
                                 AppIcon(pkg)
-                                Text(name, style = MaterialTheme.typography.bodyMedium, color = Palette.Text)
+                                Text(
+                                    name,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = if (canToggle) Palette.Text else Palette.Muted.copy(alpha = 0.45f),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
                             }
                             if (isChecked) {
                                 Icon(Icons.Check, null, tint = Palette.Primary, modifier = Modifier.size(20.dp))

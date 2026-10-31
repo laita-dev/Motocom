@@ -65,8 +65,16 @@ class Moto private constructor(private val context: Context) {
     /** Custom video bitrate override in kbps (0 = default/auto from bike). */
     val customBitrate = mutableIntStateOf(prefs.getInt(KEY_BITRATE, 0))
 
-    /** Favorite apps for Quick App Switcher. */
-    val quickApps = mutableStateOf(prefs.getStringSet(KEY_QUICK_APPS, DEFAULT_QUICK_APPS) ?: DEFAULT_QUICK_APPS)
+    /** Favorite apps for Quick App Switcher (up to [MAX_QUICK_APPS]). */
+    val quickApps = mutableStateOf(loadQuickApps())
+
+    private fun loadQuickApps(): Set<String> {
+        val saved = prefs.getStringSet(KEY_QUICK_APPS, null)
+        val source = saved ?: DEFAULT_QUICK_APPS
+        return source.filter { context.packageManager.getLaunchIntentForPackage(it) != null }
+            .take(MAX_QUICK_APPS)
+            .toSet()
+    }
 
     /** The bike whose QR code was last read off its screen; null until one is read. */
     val bike = mutableStateOf(prefs.getString(KEY_QR, null)?.let(BikeQr::parse))
@@ -253,14 +261,19 @@ class Moto private constructor(private val context: Context) {
     }
 
     fun toggleQuickApp(pkg: String) {
-        val current = quickApps.value.toMutableSet()
+        val current = quickApps.value
+            .filter { context.packageManager.getLaunchIntentForPackage(it) != null }
+            .toMutableSet()
         if (current.contains(pkg)) {
             if (current.size > 1) current.remove(pkg)
-        } else {
+        } else if (current.size < MAX_QUICK_APPS) {
             current.add(pkg)
+        } else {
+            return
         }
-        prefs.edit().putStringSet(KEY_QUICK_APPS, current).apply()
-        quickApps.value = current
+        val updated = current.toSet()
+        prefs.edit().putStringSet(KEY_QUICK_APPS, updated).apply()
+        quickApps.value = updated
     }
 
     /** The chosen app's package and the activity it opens with. */
@@ -276,7 +289,7 @@ class Moto private constructor(private val context: Context) {
         appPlace.value = AppPlace.NOWHERE
         ShellLink.refresh()
         var made: MirrorPicture? = null
-        made = MirrorPicture(::log, ::chosenComponent, { dpi.intValue }, { customBitrate.intValue }, context) { place ->
+        made = MirrorPicture(::log, ::chosenComponent, { dpi.intValue }, { customBitrate.intValue }) { place ->
             // A picture let go of says so late; only the current one speaks for the run.
             main.post { if (running.value && picture === made) appPlace.value = place }
         }
@@ -702,6 +715,7 @@ class Moto private constructor(private val context: Context) {
         private const val KEY_BITRATE = "custom_bitrate"
         private const val KEY_QUICK_APPS = "quick_apps"
         private const val KEY_QR = "qr"
+        const val MAX_QUICK_APPS = 3
         private val DEFAULT_QUICK_APPS = setOf("com.waze", "com.google.android.apps.maps", "net.osmand.plus", "com.spotify.music")
         /** The bike (its network's name) last got onto as an ordinary wifi, so it goes that way first. */
         private const val KEY_ROUTE_WIFI = "camino_wifi"

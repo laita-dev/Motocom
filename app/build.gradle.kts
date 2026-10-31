@@ -15,8 +15,8 @@ android {
         // the phone locked, Android 13.
         minSdk = 29
         targetSdk = 36
-        versionCode = 24
-        versionName = "0.21.3"
+        versionCode = 25
+        versionName = "0.21.4"
         buildConfigField("String", "OFFICIAL_VERSION", "\"0.19\"")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // Phones only: the x86 copies of the native libraries are for emulators.

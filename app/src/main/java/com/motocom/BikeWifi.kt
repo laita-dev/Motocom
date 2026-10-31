@@ -43,6 +43,7 @@ class BikeWifi(
     private var channel: WifiP2pManager.Channel? = null
     private var listening = false
     private var asked = false
+    private var askedAt = 0L
     private var joined = false
     private var triedPassword = false
     /** Whether a half-made link of the phone's with the bike has been undone in this start. */
@@ -77,54 +78,62 @@ class BikeWifi(
      * Carbit gets in by asking, as if a button were pressed on both sides. If the bike does not
      * let the phone in that way, the QR code's password opens its wifi without asking anybody.
      */
-    private val usePassword = Runnable {
-        val wifi = manager
-        val on = channel
-        val known = bike
-        if (!listening || joined || triedPassword || wifi == null || on == null || known == null) return@Runnable
-        if (waitingForAddress()) {
-            // Asking now would fail on top of the link (error 0) and cut the wait for the address
-            // short: it goes once the system lets this link go.
-            if (!passwordPending) log("la contraseña del QR se probará cuando acabe este intento, que espera dirección")
-            passwordPending = true
-            return@Runnable
-        }
-        passwordPending = false
-        // Android throws rather than refuse when the name or the password are not to its liking.
-        val wrong = when {
-            !known.ssid.matches(Regex("DIRECT-[a-zA-Z0-9]{2}.*")) -> "el nombre ${known.ssid} no empieza por DIRECT- y dos letras"
-            known.ssid.toByteArray(Charsets.UTF_8).size > 32 -> "el nombre ${known.ssid} es demasiado largo"
-            known.password.length !in 8..63 -> "la contraseña del QR no tiene entre 8 y 63 caracteres"
-            else -> null
-        }
-        if (wrong != null) {
-            log("sigue fuera del wifi de la moto, y no se puede probar la contraseña: $wrong")
-            return@Runnable
-        }
-        triedPassword = true
-        log("sigue fuera tras ${PASSWORD_AFTER_MS / 1000} s: entrando a ${known.ssid} con la contraseña del QR")
-        runCatching {
-            val config = WifiP2pConfig.Builder().setNetworkName(known.ssid).setPassphrase(known.password).build()
-            // Connecting before the cancel is done, or with a half group still there, fails with error 0.
-            val connect = {
-                runCatching {
-                    if (listening && !joined && on === channel) wifi.connect(on, config, result("entrar con la contraseña"))
-                }.onFailure { log("entrar con la contraseña: no se pudo (${it.message ?: it})") }
+    private val usePassword = object : Runnable {
+        override fun run() {
+            val wifi = manager
+            val on = channel
+            val known = bike
+            if (!listening || joined || triedPassword || wifi == null || on == null || known == null) return
+            if (waitingForAddress()) {
+                // Asking now would fail on top of the link (error 0) and cut the wait for the address
+                // short: it goes once the system lets this link go.
+                if (!passwordPending) log("la contraseña del QR se probará cuando acabe este intento, que espera dirección")
+                passwordPending = true
+                return
             }
-            val removeGroup = {
-                runCatching {
-                    if (!listening || on !== channel) return@runCatching
-                    wifi.removeGroup(on, object : WifiP2pManager.ActionListener {
-                        override fun onSuccess() { main.postDelayed({ connect() }, UNDO_WAIT_MS) }
-                        override fun onFailure(reason: Int) { connect() }
-                    })
-                }.onFailure { connect() }
+            val sinceAsked = if (asked && askedAt > 0L) SystemClock.elapsedRealtime() - askedAt else Long.MAX_VALUE
+            if (sinceAsked < PBC_WAIT_MS) {
+                // A PBC handshake is in progress: let it finish instead of cancelling it mid-flight.
+                main.postDelayed(this, PBC_WAIT_MS - sinceAsked)
+                return
             }
-            wifi.cancelConnect(on, object : WifiP2pManager.ActionListener {
-                override fun onSuccess() { removeGroup() }
-                override fun onFailure(reason: Int) { removeGroup() }
-            })
-        }.onFailure { log("entrar con la contraseña: no se pudo (${it.message ?: it})") }
+            passwordPending = false
+            // Android throws rather than refuse when the name or the password are not to its liking.
+            val wrong = when {
+                !known.ssid.matches(Regex("DIRECT-[a-zA-Z0-9]{2}.*")) -> "el nombre ${known.ssid} no empieza por DIRECT- y dos letras"
+                known.ssid.toByteArray(Charsets.UTF_8).size > 32 -> "el nombre ${known.ssid} es demasiado largo"
+                known.password.length !in 8..63 -> "la contraseña del QR no tiene entre 8 y 63 caracteres"
+                else -> null
+            }
+            if (wrong != null) {
+                log("sigue fuera del wifi de la moto, y no se puede probar la contraseña: $wrong")
+                return
+            }
+            triedPassword = true
+            log("sigue fuera tras ${PASSWORD_AFTER_MS / 1000} s: entrando a ${known.ssid} con la contraseña del QR")
+            runCatching {
+                val config = WifiP2pConfig.Builder().setNetworkName(known.ssid).setPassphrase(known.password).build()
+                // Connecting before the cancel is done, or with a half group still there, fails with error 0.
+                val connect = {
+                    runCatching {
+                        if (listening && !joined && on === channel) wifi.connect(on, config, result("entrar con la contraseña"))
+                    }.onFailure { log("entrar con la contraseña: no se pudo (${it.message ?: it})") }
+                }
+                val removeGroup = {
+                    runCatching {
+                        if (!listening || on !== channel) return@runCatching
+                        wifi.removeGroup(on, object : WifiP2pManager.ActionListener {
+                            override fun onSuccess() { main.postDelayed({ connect() }, UNDO_WAIT_MS) }
+                            override fun onFailure(reason: Int) { connect() }
+                        })
+                    }.onFailure { connect() }
+                }
+                wifi.cancelConnect(on, object : WifiP2pManager.ActionListener {
+                    override fun onSuccess() { removeGroup() }
+                    override fun onFailure(reason: Int) { removeGroup() }
+                })
+            }.onFailure { log("entrar con la contraseña: no se pudo (${it.message ?: it})") }
+        }
     }
 
     /**
@@ -170,6 +179,7 @@ class BikeWifi(
         } ?: return log("no se pudo abrir el wifi directo")
         channel = on
         asked = false
+        askedAt = 0L
         askedOnce = false
         joined = false
         triedPassword = false
@@ -270,15 +280,17 @@ class BikeWifi(
                 return@requestPeers
             }
             askedOnce = true
+            askedAt = SystemClock.elapsedRealtime()
             val config = WifiP2pConfig().apply {
                 deviceAddress = found.deviceAddress
                 wps.setup = WpsInfo.PBC
                 groupOwnerIntent = 0 // the bike runs the group
             }
             runCatching {
-                wifi.connect(on, config, result("pedir entrar en el wifi de la moto", onFailure = { asked = false }))
+                wifi.connect(on, config, result("pedir entrar en el wifi de la moto", onFailure = { asked = false; askedAt = 0L }))
             }.onFailure {
                 asked = false
+                askedAt = 0L
                 log("pedir entrar en el wifi de la moto: no se pudo (${it.message ?: it})")
             }
         }
@@ -489,8 +501,10 @@ class BikeWifi(
     private companion object {
         /** The bikes seen so far are named like "HJ-5G-XXXXXX". */
         const val DEFAULT_PREFIX = "HJ-"
-        /** Carbit took seven seconds to get in by asking; 12s gives it ample margin before trying password. */
-        const val PASSWORD_AFTER_MS = 12_000L
+        /** Carbit took seven seconds to get in by asking; allow time to discover the bike and negotiate PBC. */
+        const val PASSWORD_AFTER_MS = 22_000L
+        /** Minimum margin given to an active PBC request before cancelling it to try the QR password. */
+        const val PBC_WAIT_MS = 12_000L
         const val LOOK_AGAIN_MS = 30_000L
         /** Time for the system to let go of the half-made link before asking again. */
         const val UNDO_WAIT_MS = 2_000L

@@ -1,6 +1,5 @@
 package com.motocom
 
-import android.content.Context
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
@@ -12,6 +11,7 @@ import android.os.SystemClock
 import android.view.Surface
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.snapshots.Snapshot
 import com.motocom.bike.BikePicture
 import com.motocom.bike.PictureRequest
 import com.motocom.shell.ShellLink
@@ -44,7 +44,6 @@ class MirrorPicture(
     private val app: () -> Pair<String, String>?,
     private val dpi: () -> Int,
     private val customBitrateKbps: () -> Int = { 0 },
-    private val context: Context? = null,
     /** Each time the app moves, or failed to; from any thread. */
     private val onApp: (AppPlace) -> Unit = {}
 ) : BikePicture {
@@ -106,10 +105,10 @@ class MirrorPicture(
         }
         val width = request.encodedWidth
         val height = request.encodedHeight
+        val targetBitrate = customBitrateKbps().let { if (it > 0) it * 1000 else request.bitRate }
         return try {
             fun format(baseline: Boolean) = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height).apply {
                 setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-                val targetBitrate = customBitrateKbps().let { if (it > 0) it * 1000 else request.bitRate }
                 setInteger(MediaFormat.KEY_BIT_RATE, targetBitrate)
                 setInteger(MediaFormat.KEY_FRAME_RATE, if (request.fps > 0) request.fps else FPS)
                 setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 3)
@@ -117,12 +116,13 @@ class MirrorPicture(
                 setLong(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, 100_000L)
                 // The screen paints at 60 Hz and the bike takes about 30.
                 setFloat(MediaFormat.KEY_MAX_FPS_TO_ENCODER, FPS.toFloat())
-                // Real-time priority and minimum latency for video streaming
-                setInteger(MediaFormat.KEY_PRIORITY, 0)
-                if (Build.VERSION.SDK_INT >= 30) setInteger(MediaFormat.KEY_LATENCY, 0)
-                setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
-                setInteger("max-bframes", 0)
                 if (baseline) {
+                    // Real-time priority and minimum latency; omitted in fallback mode in case an
+                    // encoder rejects optional parameters.
+                    setInteger(MediaFormat.KEY_PRIORITY, 0)
+                    if (Build.VERSION.SDK_INT >= 30) setInteger(MediaFormat.KEY_LATENCY, 0)
+                    setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
+                    setInteger("max-bframes", 0)
                     setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline)
                     // 3.1 holds up to 1280x720; bigger screens need 4.
                     val blocks = ((width + 15) / 16) * ((height + 15) / 16)
@@ -139,6 +139,9 @@ class MirrorPicture(
             val encoder = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
             codec = encoder
             keyframesTold = 0
+            frameCount = 0
+            bytesCount = 0
+            lastStatsTime = SystemClock.elapsedRealtime()
             header = null
             synchronized(queue) {
                 waitingForWholeFrame = true
@@ -165,8 +168,8 @@ class MirrorPicture(
                 prepare(false)
             }
             surface = input
-            log("codificador ${encoder.name}: ${width}x$height a ${request.bitRate / 1000} kbit/s")
-            val framed = BlackEdges(input, width, height, context, log)
+            log("codificador ${encoder.name}: ${width}x$height a ${targetBitrate / 1000} kbit/s")
+            val framed = BlackEdges(input, width, height, log)
             edges = framed
 
             val id = shell.show(framed.surface, width, framed.inner, dpi())
@@ -306,6 +309,11 @@ class MirrorPicture(
         codecThread?.quitSafely()
         codecThread = null
         synchronized(queue) { chunks.clear() }
+        Snapshot.withMutableSnapshot {
+            statsFps.floatValue = 0f
+            statsBitrateKbps.intValue = 0
+            statsBacklog.intValue = 0
+        }
     }
 
     /**
@@ -348,20 +356,6 @@ class MirrorPicture(
             }
             if (bytes.isEmpty() || codec !== this@MirrorPicture.codec) return
 
-            val now = SystemClock.elapsedRealtime()
-            frameCount++
-            bytesCount += bytes.size
-            if (now - lastStatsTime >= 1000) {
-                val dt = (now - lastStatsTime) / 1000.0f
-                if (dt > 0) {
-                    statsFps.floatValue = frameCount / dt
-                    statsBitrateKbps.intValue = ((bytesCount * 8 / 1000.0) / dt).toInt()
-                }
-                frameCount = 0
-                bytesCount = 0
-                lastStatsTime = now
-            }
-
             if (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
                 header = bytes
                 log("cabecera del vídeo: ${describe(bytes)}")
@@ -377,6 +371,7 @@ class MirrorPicture(
                 log("imagen completa ${keyframesTold}: ${frame.size} bytes, partes ${nalTypes(frame).joinToString(",")}")
             }
             // Checking and adding in one go, so fresh() cannot empty the queue in between.
+            val currentBacklog: Int
             synchronized(queue) {
                 // The bike is slower than the encoder, or has stopped asking: start over from a
                 // whole frame rather than hand it a gap.
@@ -390,7 +385,26 @@ class MirrorPicture(
                     waitingForWholeFrame = false
                 }
                 chunks += frame
-                statsBacklog.intValue = chunks.size
+                currentBacklog = chunks.size
+            }
+
+            val now = SystemClock.elapsedRealtime()
+            frameCount++
+            bytesCount += frame.size
+            if (now - lastStatsTime >= 1000) {
+                val dt = (now - lastStatsTime) / 1000.0f
+                if (dt > 0) {
+                    val fps = frameCount / dt
+                    val kbps = ((bytesCount * 8 / 1000.0) / dt).toInt()
+                    Snapshot.withMutableSnapshot {
+                        statsFps.floatValue = fps
+                        statsBitrateKbps.intValue = kbps
+                        statsBacklog.intValue = currentBacklog
+                    }
+                }
+                frameCount = 0
+                bytesCount = 0
+                lastStatsTime = now
             }
         }
 
